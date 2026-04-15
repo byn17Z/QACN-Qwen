@@ -1,0 +1,32 @@
+# Model Configuration
+model:
+  base_model_path: "models/Qwen2.5-7B-Instruct"  # Path to base model
+  current_model_path: "models/current_model"      # Path to the iteratively updated model
+  model_family: "Qwen2.5"
+  size: "7B"
+
+# Fine-tuning Hyperparameters (QLoRA)
+training:
+  method: "4bit-QLoRA"
+  batch_size: 128 # Optimized for A10: reduced for more frequent updates (8192/128 = 64 per shard)
+  context_length: 4096 # Fits in 24GB VRAM with 4-bit QLoRA
+  learning_rate: 1e-4 # Adjusted slightly for 7B stability
+  num_train_epochs: 1
+  lora_r: 32 # Balanced rank for 7B
+  lora_alpha: 64
+  lora_dropout: 0.1
+  num_iterations: 20
+  train_subset_size: 8192
+  test_set_size: 4096
+
+# Dataset Configuration
+dataset:
+  name: "Fineweb-Edu-Chinese-V2.2"
+  raw_data_path: "data/raw"
+  processed_data_path: "data/processed"
+
+# Logging
+logging:
+  use_wandb: true
+  project_name: "QEdpediaCN-Qwen"
+  output_dir: "outputs"
