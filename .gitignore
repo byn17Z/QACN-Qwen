@@ -6,6 +6,8 @@
 
 /models/
 
+/outputs/
+
 /wandb/
 
 __pycache__/
