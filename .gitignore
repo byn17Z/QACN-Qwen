@@ -6,4 +6,6 @@
 
 /models/
 
+/wandb/
+
 __pycache__/

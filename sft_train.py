@@ -12,11 +12,10 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainingArguments,
     EarlyStoppingCallback,
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer
+from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 from src.utils import load_config
 
@@ -31,7 +30,7 @@ def main(config_path: str, timestamp: str):
     model_path = model_config["base_model_path"]
     train_data_path = os.path.join(config["dataset"]["processed_data_path"], "train.jsonl")
     val_data_path = os.path.join(config["dataset"]["processed_data_path"], "val.jsonl")
-    output_dir = os.path.join(logging_config["output_dir"], "lora_adapter")
+    output_dir = os.path.join(logging_config["output_dir"], "lora_adapter", timestamp)
 
     print(f"Loading model from: {model_path}")
     print(f"Loading training data from: {train_data_path}")
@@ -65,10 +64,10 @@ def main(config_path: str, timestamp: str):
     model = prepare_model_for_kbit_training(model)
 
     lora_config = LoraConfig(
-        r=training_config["lora_r"],
-        lora_alpha=training_config["lora_alpha"],
+        r=int(training_config["lora_r"]),
+        lora_alpha=int(training_config["lora_alpha"]),
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=training_config["lora_dropout"],
+        lora_dropout=float(training_config["lora_dropout"]),
         bias="none",
         task_type="CAUSAL_LM"
     )
@@ -86,21 +85,17 @@ def main(config_path: str, timestamp: str):
     val_dataset = load_dataset("json", data_files=val_data_path, split="train")
 
     def formatting_prompts_func(example):
-        output_texts = []
-        for i in range(len(example['instruction'])):
-            text = f"Instruction: {example['instruction'][i]}\nInput: {example['input'][i]}\nOutput: {example['output'][i]}"
-            output_texts.append(text)
-        return output_texts
+        return f"Instruction: {example['instruction']}\nInput: {example['input']}\nOutput: {example['output']}"
 
     # 5. Trainer Setup
-    eval_steps = training_config["eval_steps"]
+    eval_steps = int(training_config["eval_steps"])
 
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=output_dir,
         per_device_train_batch_size=1,
-        gradient_accumulation_steps=training_config["batch_size"],
-        learning_rate=training_config["learning_rate"],
-        num_train_epochs=training_config.get("num_train_epochs", 1),
+        gradient_accumulation_steps=int(training_config["batch_size"]),
+        learning_rate=float(training_config["learning_rate"]),
+        num_train_epochs=int(training_config.get("num_train_epochs", 1)),
         logging_steps=10,
         eval_strategy="steps",
         eval_steps=eval_steps,
@@ -112,7 +107,8 @@ def main(config_path: str, timestamp: str):
         bf16=torch.cuda.is_bf16_supported(),
         fp16=not torch.cuda.is_bf16_supported(),
         report_to="wandb" if logging_config["use_wandb"] else "none",
-        run_name=f"{logging_config['project_name']}-sft"
+        run_name=f"{logging_config['project_name']}-sft",
+        max_length=int(training_config["context_length"]),
     )
 
     trainer = SFTTrainer(
@@ -120,12 +116,11 @@ def main(config_path: str, timestamp: str):
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         args=training_args,
-        max_seq_length=training_config["context_length"],
         formatting_func=formatting_prompts_func,
         callbacks=[
             EarlyStoppingCallback(
-                early_stopping_patience=training_config["early_stopping_patience"],
-                early_stopping_threshold=training_config["early_stopping_threshold"],
+                early_stopping_patience=int(training_config["early_stopping_patience"]),
+                early_stopping_threshold=float(training_config["early_stopping_threshold"]),
             )
         ],
     )

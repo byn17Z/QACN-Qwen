@@ -59,7 +59,7 @@ def main(config_path: str, mode: str, timestamp: str):
     # Load in 8-bit or FP16 for eval to save memory
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
         device_map="auto",
         trust_remote_code=True
     )
@@ -67,7 +67,7 @@ def main(config_path: str, mode: str, timestamp: str):
     print(f"Loading {mode} set: {eval_data_path}")
     eval_dataset = load_dataset("json", data_files=eval_data_path, split="train")
     
-    ppl, loss = calculate_perplexity(model, tokenizer, eval_dataset, max_length=config["training"]["context_length"])
+    ppl, loss = calculate_perplexity(model, tokenizer, eval_dataset, max_length=int(config["training"]["context_length"]))
 
     metrics = {
         "mode": mode,

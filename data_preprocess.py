@@ -39,9 +39,10 @@ def main(config_path: str):
 
     raw_data_dir = dataset_config["raw_data_path"]
     output_dir = dataset_config["processed_data_path"]
-    train_set_size = training_config["train_set_size"]
-    val_set_size = training_config["val_set_size"]
-    test_set_size = training_config["test_set_size"]
+    use_processed_data = dataset_config.get("use_processed_data", False)
+    train_set_size = int(training_config["train_set_size"])
+    val_set_size = int(training_config["val_set_size"])
+    test_set_size = int(training_config["test_set_size"])
 
     os.makedirs(output_dir, exist_ok=True)
     if not os.path.exists(output_dir):
@@ -50,11 +51,21 @@ def main(config_path: str):
     else:
         print(f"Output directory is set to: {output_dir}")
 
-    print(f"Loading dataset: {dataset_config['name']}")
-    dataset = load_dataset('json', data_dir=raw_data_dir, split='train')
+    sft_data_path = os.path.join(output_dir, "sft_data.jsonl")
 
-    print(f"Formatting {len(dataset)} entries...")
-    processed_dataset = dataset.map(format_dataset_entry, remove_columns=dataset.column_names)
+    if use_processed_data:
+        print(f"Loading processed dataset from: {sft_data_path}")
+        processed_dataset = load_dataset('json', data_files=sft_data_path, split='train')
+    else:
+        print(f"Loading raw dataset: {dataset_config['name']}")
+        dataset = load_dataset('json', data_dir=raw_data_dir, split='train')
+
+        print(f"Formatting {len(dataset)} entries...")
+        processed_dataset = dataset.map(format_dataset_entry, remove_columns=dataset.column_names)
+
+        print(f"Saving processed dataset to: {sft_data_path}")
+        processed_dataset.to_json(sft_data_path, force_ascii=False)
+        print(f"Processed dataset saved ({len(processed_dataset)} entries)")
 
     # Shuffle and split into train, val, and test sets
     shuffled_dataset = processed_dataset.shuffle(seed=42)
