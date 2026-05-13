@@ -14,25 +14,41 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 from src.utils import load_config
 
-def calculate_perplexity(model, tokenizer, dataset, max_length=512):
+def calculate_perplexity(model, tokenizer, dataset, max_length=512, rag_components=None, context_mask=False, rag_inference=False):
     model.eval()
     nlls = []
-    
-    print("Evaluating perplexity...")
+
+    if rag_inference and rag_components:
+        from rag.rag_retrieve import retrieve
+
+    print(f"Evaluating perplexity (context_mask={context_mask}, rag_inference={rag_inference})...")
     for example in tqdm(dataset):
         instruction = example.get("instruction", "")
         input_text = example.get("input", "")
         output_text = example.get("output", "")
-        
-        full_text = f"Instruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
-        
+
+        # Build context based on config flags
+        if context_mask:
+            # No context
+            full_text = f"Instruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
+        elif rag_inference and rag_components:
+            # RAG-retrieved context
+            contexts = retrieve(instruction, rag_components["collection"], rag_components["reranker"], rag_components["embedder"],
+                                top_k=rag_components.get("top_k", 20), top_n=rag_components.get("top_n", 5))
+            context = "\n".join(contexts) if contexts else ""
+            full_text = f"Context: {context}\nInstruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
+        else:
+            # Labeled context from raw_content
+            raw_content = example.get("raw_content", "")
+            if raw_content:
+                full_text = f"Context: {raw_content}\nInstruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
+            else:
+                full_text = f"Instruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
+
         encodings = tokenizer(full_text, return_tensors="pt", max_length=max_length, truncation=True)
         input_ids = encodings.input_ids.to(model.device)
         target_ids = input_ids.clone()
-        
-        # We only want to calculate loss on the output part (optional but better)
-        # For simplicity now, we calculate on the whole sequence
-        
+
         with torch.no_grad():
             outputs = model(input_ids, labels=target_ids)
             neg_log_likelihood = outputs.loss
@@ -45,11 +61,33 @@ def main(config_path: str, mode: str, timestamp: str):
     config = load_config(config_path)
     model_config = config["model"]
     logging_config = config["logging"]
-    
+    rag_config = config.get("rag", {})
+
+    # RAG flags
+    context_mask_test = rag_config.get("context_mask_test", False)
+    rag_inference_test = rag_config.get("rag_inference_test", False)
+
+    # Load RAG components if needed
+    rag_components = None
+    if not context_mask_test and rag_inference_test:
+        print("Loading RAG components for evaluation...")
+        from rag.rag_db import load_knowledge_db, load_embedder
+        from rag.rag_retrieve import load_reranker, retrieve
+        collection = load_knowledge_db(rag_config["db_path"], rag_config["embedder_path"])
+        embedder = load_embedder(rag_config["embedder_path"])
+        reranker = load_reranker(rag_config["reranker_path"])
+        rag_components = {
+            "collection": collection,
+            "reranker": reranker,
+            "embedder": embedder,
+            "top_k": int(rag_config.get("retrieve_top_k", 20)),
+            "top_n": int(rag_config.get("retrieve_top_n", 5)),
+        }
+
     model_path = model_config["current_model_path"]
     if not os.path.exists(model_path) or not os.listdir(model_path):
         model_path = model_config["base_model_path"]
-    
+
     data_filename = "val.jsonl" if mode == "validation" else "test.jsonl"
     eval_data_path = os.path.join(config["dataset"]["processed_data_path"], data_filename)
 
@@ -66,8 +104,14 @@ def main(config_path: str, mode: str, timestamp: str):
 
     print(f"Loading {mode} set: {eval_data_path}")
     eval_dataset = load_dataset("json", data_files=eval_data_path, split="train")
-    
-    ppl, loss = calculate_perplexity(model, tokenizer, eval_dataset, max_length=int(config["training"]["context_length"]))
+
+    ppl, loss = calculate_perplexity(
+        model, tokenizer, eval_dataset,
+        max_length=int(config["training"]["context_length"]),
+        rag_components=rag_components,
+        context_mask=context_mask_test,
+        rag_inference=rag_inference_test,
+    )
 
     metrics = {
         "mode": mode,

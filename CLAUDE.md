@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-QEdpediaCN-Qwen is a QLoRA fine-tuning project that trains Chinese educational QA models using the Qwen2.5 family (1.5B/3B/7B/14B) on the Fineweb-Edu-Chinese-V2.2 dataset. The pipeline preprocesses data, benchmarks the base model, trains with validation early stopping via Transformers' native `EarlyStoppingCallback`, merges LoRA adapters into the base model, and evaluates the merged model.
+QACN-Qwen is a QLoRA fine-tuning project that trains Chinese educational QA models using the Qwen2.5 family (1.5B/3B/7B/14B) on the Fineweb-Edu-Chinese-V2.2 dataset. The pipeline preprocesses data, benchmarks the base model, trains with validation early stopping via Transformers' native `EarlyStoppingCallback`, merges LoRA adapters into the base model, and evaluates the merged model.
 
 ## Commands
 
@@ -22,6 +22,9 @@ python sft_train.py --config configs/config.yaml --timestamp "20260512153000"
 python test_eval.py --config configs/config.yaml --mode validation --timestamp "20260512153000"
 python test_eval.py --config configs/config.yaml --mode test --timestamp "20260512153000"
 
+# RAG testing (requires --mode and --timestamp)
+python rag/rag_test.py --config configs/config.yaml --mode validation --timestamp "20260512153000"
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -33,17 +36,43 @@ wandb login
 
 The pipeline is orchestrated by `main.py` which generates a digit-only timestamp (e.g., `20260513153000`) and runs:
 
-1. **Preprocessing** (`data_preprocess.py`): Loads raw JSONL from `data/raw/`, formats into Instruction/Output SFT format, shuffles (seed 42), splits into train/val/test sets based on config sizes, saves to `data/processed/train.jsonl`, `val.jsonl`, `test.jsonl`. Supports `use_processed_data` config flag to skip reprocessing and load `sft_data.jsonl` directly.
+1. **Preprocessing** (`data_preprocess.py`): Loads raw JSONL from `data/raw/`, formats into Instruction/Output SFT format, preserves `raw_content` field for RAG knowledge base, shuffles (seed 42), splits into train/val/test sets based on config sizes, saves to `data/processed/train.jsonl`, `val.jsonl`, `test.jsonl`. Supports `use_processed_data` config flag to skip reprocessing and load `sft_data.jsonl` directly.
 
-2. **Benchmark Evaluation (Pre-Training)** (`test_eval.py`): Evaluates the base model on both validation and test sets before training, establishing baseline perplexity.
+2. **RAG Knowledge Base** (`rag/rag_db.py`): Builds or loads the ChromaDB vector store from `raw_content` fields in `sft_data.jsonl`. Controlled by `build_rag_db` config flag — `true` rebuilds from scratch, `false` loads existing DB. Only runs when any RAG inference flag is enabled. Runs after preprocessing since it reads `sft_data.jsonl`.
 
-3. **Training** (`sft_train.py`): Loads base model with 4-bit quantization, applies LoRA to all linear layers (q/k/v/o_proj, gate/up/down_proj), trains via `SFTTrainer` with validation early stopping. Evaluates on val set every `eval_steps` steps; stops when `eval_loss` hasn't improved by `early_stopping_threshold` for `early_stopping_patience` evaluations. Saves best LoRA adapters to `outputs/lora_adapter/<timestamp>/`. Logs full training loss history to `outputs/train_stats.json`.
+3. **Benchmark Evaluation (Pre-Training)** (`test_eval.py`): Evaluates the base model on both validation and test sets before training, establishing baseline perplexity.
 
-4. **Merge LoRA** (`src/model_utils.py`): Merges trained LoRA adapters into the base model at full precision (bfloat16/float16) and saves to `models/current_model`. Frees GPU memory after saving.
+4. **Training** (`sft_train.py`): Loads base model with 4-bit quantization, applies LoRA to all linear layers (q/k/v/o_proj, gate/up/down_proj), trains via `SFTTrainer` with validation early stopping. Evaluates on val set every `eval_steps` steps; stops when `eval_loss` hasn't improved by `early_stopping_threshold` for `early_stopping_patience` evaluations. Saves best LoRA adapters to `outputs/lora_adapter/<timestamp>/`. Logs full training loss history to `outputs/train_stats.json`. Supports context-aware formatting via RAG config flags.
 
-5. **Post-Training Evaluation** (`test_eval.py`): Evaluates the merged model on both validation and test sets, enabling direct comparison with pre-training benchmarks.
+5. **Merge LoRA** (`src/model_utils.py`): Merges trained LoRA adapters into the base model at full precision (bfloat16/float16) and saves to `models/current_model`. Frees GPU memory after saving.
 
-6. **Config**: All hyperparameters in `configs/config.yaml` (paths, LoRA params, batch size, context length, early stopping params, data sizes).
+6. **Post-Training Evaluation** (`test_eval.py`): Evaluates the merged model on both validation and test sets, enabling direct comparison with pre-training benchmarks. Supports context-aware formatting via RAG config flags.
+
+7. **RAG Testing** (`rag/rag_test.py`): Standalone module to test RAG retrieval quality (Precision@k, Recall@k, MRR) and compare model perplexity across three context modes: no context, labeled context, and RAG-retrieved context.
+
+8. **Config**: All hyperparameters in `configs/config.yaml` (paths, LoRA params, batch size, context length, early stopping params, data sizes, RAG flags).
+
+## RAG Module (`rag/`)
+
+The RAG module provides retrieval-augmented generation capabilities. Components:
+- **Embedder**: `BAAI/bge-small-zh-v1.5` — encodes text into 512-dim vectors
+- **Reranker**: `BAAI/bge-reranker-base` — cross-encoder for reranking retrieved candidates
+- **Database**: ChromaDB — persistent vector store at `rag/db/`
+
+Files:
+- `rag/rag_db.py` — builds and loads the knowledge DB from `raw_content` fields in processed data
+- `rag/rag_retrieve.py` — retrieves top-k candidates with embedder, reranks with reranker, returns top-n
+- `rag/rag_test.py` — tests retrieval quality (Precision@k, Recall@k, MRR) and compares perplexity across context modes
+
+RAG config flags in `configs/config.yaml` under `rag:` section:
+- `build_rag_db` — `true` rebuilds DB from `sft_data.jsonl`; `false` loads existing DB
+- `rag_inference_deploy` — integrate RAG when deploying
+- `context_mask_test` / `context_mask_train` — hide context entirely during eval/training
+- `rag_inference_test` / `rag_inference_train` — `true` uses RAG-retrieved docs; `false` uses labeled `raw_content`; ignored when context mask is `true`
+
+Data format: raw data has `raw_content` field as labeled knowledge context. `data_preprocess.py` preserves this field in processed output.
+
+Detailed implementation plan: see `rag.md`.
 
 ## Logging
 
@@ -69,7 +98,7 @@ Log files:
 - `merge_lora_to_base` loads the base model at full precision (not quantized) for accurate merging, then frees GPU memory after saving.
 - `use_processed_data` config flag: when `true`, loads `data/processed/sft_data.jsonl` directly; when `false`, processes raw data and saves it as `sft_data.jsonl`.
 - Virtual environment: `.venv-QEDpediaCN-Qwen` (non-standard name, gitignored).
-- Gitignored directories: `.venv-QEDpediaCN-Qwen/`, `hf_cache/`, `data/`, `models/`, `__pycache__/`.
+- Gitignored directories: `.venv-QEDpediaCN-Qwen/`, `hf_cache/`, `data/`, `models/`, `rag/db/`, `rag/models/`, `__pycache__/`.
 
 ## Code Conventions
 

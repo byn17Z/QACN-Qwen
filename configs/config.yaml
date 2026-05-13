@@ -29,6 +29,25 @@ dataset:
   processed_data_path: "data/processed"
   use_processed_data: true
 
+# RAG Configuration
+rag:
+  # Paths
+  embedder_path: "rag/models/bge-small-zh-v1.5"
+  reranker_path: "rag/models/bge-reranker-base"
+  db_path: "rag/db"
+
+  # Retrieval params
+  retrieve_top_k: 20         # candidates from embedding search
+  retrieve_top_n: 5          # final results after reranking
+
+  # Pipeline flags
+  build_rag_db: true         # true = rebuild DB from sft_data.jsonl; false = load existing DB
+  rag_inference_deploy: false # integrate RAG when deploying
+  context_mask_test: false    # hide context during testing
+  rag_inference_test: false   # true = use RAG docs; false = use labeled context; ignored if context_mask_test=true
+  context_mask_train: false   # hide context during training
+  rag_inference_train: false  # true = use RAG docs; false = use labeled context; ignored if context_mask_train=true
+
 # Logging
 logging:
   use_wandb: false

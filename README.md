@@ -1,24 +1,28 @@
-# QEdpediaCN-Qwen
+# QACN-Qwen
 
-QEdpediaCN-Qwen is an SFT project dedicated to developing educational Question-Answering models in Chinese language based on the **Qwen2.5** model family and the **Fineweb-Edu-Chinese-V2.2** dataset.
+QACN-Qwen is an SFT project dedicated to developing educational Question-Answering models in Chinese language based on the **Qwen2.5** model family and the **Fineweb-Edu-Chinese-V2.2** dataset.
 
 ## Overview
 
 The project trains a Qwen2.5 model using **4-bit QLoRA** with **validation early stopping** via Transformers' native `EarlyStoppingCallback`. The data is split into train, validation, and test sets, and training stops automatically when validation loss stops improving. After training, LoRA adapters are merged into the base model and evaluated on both validation and test sets, enabling direct comparison with pre-training benchmarks.
 
+The pipeline supports **Retrieval-Augmented Generation (RAG)** with configurable context modes: labeled context from training data, RAG-retrieved context, or no context.
+
 ## Core Architecture
 
 The training workflow follows a structured pipeline:
 1.  **Preprocessing:** Converts raw dataset files into SFT (Instruction/Output) format and splits them into train, validation, and test sets. Supports a `use_processed_data` flag to skip reprocessing and load previously saved data directly.
-2.  **Benchmark Evaluation (Pre-Training):** Evaluates the base model on validation and test sets to establish baseline perplexity.
-3.  **Training:**
+2.  **RAG Knowledge Base:** Builds or loads a ChromaDB vector store from `raw_content` fields for retrieval-augmented context (only runs when RAG inference flags are enabled). Runs after preprocessing since it reads the processed data.
+3.  **Benchmark Evaluation (Pre-Training):** Evaluates the base model on validation and test sets to establish baseline perplexity.
+4.  **Training:**
     - **Load:** Initializes the base model using 4-bit quantization.
-    - **Train:** Executes SFT training on the train set with LoRA.
+    - **Train:** Executes SFT training on the train set with LoRA. Supports context-aware formatting with labeled or RAG-retrieved context.
     - **Early Stopping:** Evaluates on the validation set at regular step intervals. Training stops when validation loss plateaus (configurable patience and threshold).
     - **Save:** Saves the best LoRA adapters to `outputs/lora_adapter/<timestamp>/`.
     - **Log:** Records full training loss history to `outputs/train_stats.json`.
-4.  **Merge LoRA:** Merges trained LoRA adapters into the base model at full precision and saves to `models/current_model`.
-5.  **Post-Training Evaluation:** Evaluates the merged model on validation and test sets, enabling direct comparison with pre-training benchmarks.
+5.  **Merge LoRA:** Merges trained LoRA adapters into the base model at full precision and saves to `models/current_model`.
+6.  **Post-Training Evaluation:** Evaluates the merged model on validation and test sets, enabling direct comparison with pre-training benchmarks.
+7.  **RAG Testing:** Standalone module to test retrieval quality (Precision@k, Recall@k, MRR) and compare perplexity across context modes.
 
 ## Technical Stack
 
@@ -26,6 +30,7 @@ The training workflow follows a structured pipeline:
 - **Dataset:** Fineweb-Edu-Chinese-V2.2 (sft_qa subset)
 - **Technique:** 4-bit QLoRA (via `bitsandbytes`, `peft`)
 - **Orchestration:** `trl`, `transformers`, `accelerate`
+- **RAG:** `sentence-transformers`, `chromadb`, `BAAI/bge-small-zh-v1.5` (embedder), `BAAI/bge-reranker-base` (reranker)
 - **Logging:** `wandb`, local JSON stats (`train_stats.json`, `eval_stats.json`)
 
 ## Project Structure
@@ -38,6 +43,12 @@ The training workflow follows a structured pipeline:
 │   └── config.yaml         # Training hyperparameters and paths
 ├── models/                 # Base and merged model weights
 ├── outputs/                # LoRA adapters and JSON logs
+├── rag/
+│   ├── rag_db.py           # Knowledge base construction and loading
+│   ├── rag_retrieve.py     # Retrieval and reranking logic
+│   ├── rag_test.py         # RAG testing (retrieval quality + perplexity)
+│   ├── db/                 # ChromaDB vector store (gitignored)
+│   └── models/             # Embedder and reranker models (gitignored)
 ├── src/
 │   ├── utils.py            # Config loading utilities
 │   └── model_utils.py      # LoRA merge utilities
@@ -57,8 +68,8 @@ The training workflow follows a structured pipeline:
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/byn17Z/QEdpediaCN-Qwen.git
-   cd QEdpediaCN-Qwen
+   git clone https://github.com/byn17Z/QACN-Qwen.git
+   cd QACN-Qwen
    ```
 
 2. Create and activate a virtual environment:
@@ -92,6 +103,13 @@ training:
 
 dataset:
   use_processed_data: false  # Set true to skip reprocessing raw data
+
+rag:
+  build_rag_db: true         # true = rebuild DB; false = load existing
+  context_mask_test: false   # Hide context during testing
+  rag_inference_test: false  # true = use RAG docs; false = labeled context
+  context_mask_train: false  # Hide context during training
+  rag_inference_train: false # true = use RAG docs; false = labeled context
 ```
 
 ### 2. Run the Pipeline
@@ -111,6 +129,9 @@ python sft_train.py --config configs/config.yaml --timestamp "20260512153000"
 # Evaluation (validation or test mode)
 python test_eval.py --config configs/config.yaml --mode validation --timestamp "20260512153000"
 python test_eval.py --config configs/config.yaml --mode test --timestamp "20260512153000"
+
+# RAG testing
+python rag/rag_test.py --config configs/config.yaml --mode validation --timestamp "20260512153000"
 ```
 
 ## Known Issues
@@ -128,6 +149,7 @@ Each pipeline run generates a shared timestamp. Both training and evaluation scr
 
 - `outputs/train_stats.json` — full training loss history per run
 - `outputs/eval_stats.json` — evaluation metrics per run (with `mode` mark: "validation" or "test")
+- `outputs/rag_test_stats.json` — RAG retrieval metrics and perplexity comparison across context modes
 
 ## Monitoring
 Training progress and evaluation metrics are logged to **Weights & Biases (wandb)**. Ensure you are logged in:

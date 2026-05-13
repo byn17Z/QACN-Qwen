@@ -24,7 +24,8 @@ def format_dataset_entry(entry: Dict[str, Any]) -> Dict[str, str]:
     instruction = entry.get("instruction", "")
     input_text = entry.get("input", "")
     output_text = entry.get("output", "")
-    return {"instruction": instruction, "input": input_text, "output": output_text}
+    raw_content = entry.get("raw_content", "")
+    return {"instruction": instruction, "input": input_text, "output": output_text, "raw_content": raw_content}
 
 def main(config_path: str):
     '''

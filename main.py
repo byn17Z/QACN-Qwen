@@ -29,6 +29,25 @@ def main(config_path: str):
     print("=== Stage 1: Data Preprocessing ===")
     run_command([python_path, "data_preprocess.py", "--config", config_path])
 
+    # 1.5. RAG Knowledge Base (after preprocessing, since it reads sft_data.jsonl)
+    rag_config = config.get("rag", {})
+    any_rag_flag = (
+        rag_config.get("rag_inference_test", False)
+        or rag_config.get("rag_inference_train", False)
+        or rag_config.get("rag_inference_deploy", False)
+    )
+
+    if any_rag_flag:
+        if rag_config.get("build_rag_db", False):
+            print("\n=== Stage 1.5: Building RAG Knowledge Base ===")
+            from rag.rag_db import build_knowledge_db
+            sft_data_path = os.path.join(config["dataset"]["processed_data_path"], "sft_data.jsonl")
+            build_knowledge_db(sft_data_path, rag_config["db_path"], rag_config["embedder_path"])
+        else:
+            print("\n=== Stage 1.5: Loading Existing RAG Knowledge Base ===")
+            from rag.rag_db import load_knowledge_db
+            load_knowledge_db(rag_config["db_path"], rag_config["embedder_path"])
+
     # 2. Benchmark Evaluation (before training)
     print("\n=== Stage 2: Benchmark Evaluation (Pre-Training) ===")
     run_command([python_path, "test_eval.py", "--config", config_path, "--mode", "validation", "--timestamp", timestamp])

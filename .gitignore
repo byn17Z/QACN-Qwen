@@ -11,3 +11,6 @@
 /wandb/
 
 __pycache__/
+
+/rag/db/
+/rag/models/

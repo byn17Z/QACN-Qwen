@@ -25,12 +25,29 @@ def main(config_path: str, timestamp: str):
     model_config = config["model"]
     training_config = config["training"]
     logging_config = config["logging"]
+    rag_config = config.get("rag", {})
+
+    # RAG flags
+    context_mask_train = rag_config.get("context_mask_train", False)
+    rag_inference_train = rag_config.get("rag_inference_train", False)
 
     # Paths
     model_path = model_config["base_model_path"]
     train_data_path = os.path.join(config["dataset"]["processed_data_path"], "train.jsonl")
     val_data_path = os.path.join(config["dataset"]["processed_data_path"], "val.jsonl")
     output_dir = os.path.join(logging_config["output_dir"], "lora_adapter", timestamp)
+
+    # Load RAG components if needed
+    rag_collection = None
+    rag_reranker = None
+    rag_embedder = None
+    if not context_mask_train and rag_inference_train:
+        print("Loading RAG components for training context...")
+        from rag.rag_db import load_knowledge_db, load_embedder
+        from rag.rag_retrieve import load_reranker, retrieve
+        rag_collection = load_knowledge_db(rag_config["db_path"], rag_config["embedder_path"])
+        rag_embedder = load_embedder(rag_config["embedder_path"])
+        rag_reranker = load_reranker(rag_config["reranker_path"])
 
     print(f"Loading model from: {model_path}")
     print(f"Loading training data from: {train_data_path}")
@@ -85,7 +102,26 @@ def main(config_path: str, timestamp: str):
     val_dataset = load_dataset("json", data_files=val_data_path, split="train")
 
     def formatting_prompts_func(example):
-        return f"Instruction: {example['instruction']}\nInput: {example['input']}\nOutput: {example['output']}"
+        instruction = example['instruction']
+        input_text = example['input']
+        output_text = example['output']
+
+        if context_mask_train:
+            # No context
+            return f"Instruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
+        elif rag_inference_train and rag_collection is not None:
+            # RAG-retrieved context
+            contexts = retrieve(instruction, rag_collection, rag_reranker, rag_embedder,
+                                top_k=int(rag_config.get("retrieve_top_k", 20)),
+                                top_n=int(rag_config.get("retrieve_top_n", 5)))
+            context = "\n".join(contexts) if contexts else ""
+            return f"Context: {context}\nInstruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
+        else:
+            # Labeled context from raw_content
+            raw_content = example.get('raw_content', '')
+            if raw_content:
+                return f"Context: {raw_content}\nInstruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
+            return f"Instruction: {instruction}\nInput: {input_text}\nOutput: {output_text}"
 
     # 5. Trainer Setup
     eval_steps = int(training_config["eval_steps"])
