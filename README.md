@@ -78,8 +78,8 @@ The training workflow follows a structured pipeline:
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/byn17Z/QEdpediaCN-Qwen.git
-   cd QEdpediaCN-Qwen
+   git clone https://github.com/byn17Z/QACN-Qwen.git
+   cd QACN-Qwen
    ```
 
 2. Create and activate a virtual environment:
