@@ -14,18 +14,21 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 from src.utils import load_config
 
-def calculate_perplexity(model, tokenizer, dataset, max_length=512, rag_components=None, context_mask=False, rag_inference=False):
+def calculate_perplexity(model, tokenizer, dataset, max_length=512, rag_components=None, context_mask=False, rag_inference=False, use_distilled=False):
     model.eval()
     nlls = []
 
     if rag_inference and rag_components:
         from rag.rag_retrieve import retrieve
 
-    print(f"Evaluating perplexity (context_mask={context_mask}, rag_inference={rag_inference})...")
+    print(f"Evaluating perplexity (context_mask={context_mask}, rag_inference={rag_inference}, use_distilled={use_distilled})...")
     for example in tqdm(dataset):
         instruction = example.get("instruction", "")
         input_text = example.get("input", "")
-        output_text = example.get("output", "")
+        if use_distilled and example.get('distilled_output'):
+            output_text = example['distilled_output']
+        else:
+            output_text = example.get("output", "")
 
         # Build context based on config flags
         if context_mask:
@@ -61,11 +64,15 @@ def main(config_path: str, mode: str, timestamp: str):
     config = load_config(config_path)
     model_config = config["model"]
     logging_config = config["logging"]
+    dataset_config = config.get("dataset", {})
     rag_config = config.get("rag", {})
 
     # RAG flags
     context_mask_test = rag_config.get("context_mask_test", False)
     rag_inference_test = rag_config.get("rag_inference_test", False)
+
+    # Distillation flag
+    use_distilled = dataset_config.get("use_distilled_data", False)
 
     # Load RAG components if needed
     rag_components = None
@@ -111,6 +118,7 @@ def main(config_path: str, mode: str, timestamp: str):
         rag_components=rag_components,
         context_mask=context_mask_test,
         rag_inference=rag_inference_test,
+        use_distilled=use_distilled,
     )
 
     metrics = {
@@ -144,14 +152,14 @@ def main(config_path: str, mode: str, timestamp: str):
     # Append to existing results if any
     results = []
     if os.path.exists(eval_output_path):
-        with open(eval_output_path, 'r') as f:
+        with open(eval_output_path, 'r', encoding='utf-8') as f:
             try:
                 results = json.load(f)
-            except:
+            except (json.JSONDecodeError, ValueError):
                 results = []
-    
+
     results.append(metrics)
-    with open(eval_output_path, 'w') as f:
+    with open(eval_output_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=4)
         
     print(f"Metrics saved to {eval_output_path}")

@@ -1,29 +1,30 @@
-# QACN-Qwen
+# QEdpediaCN-Qwen
 
-QACN-Qwen is an SFT project dedicated to developing educational Question-Answering models in Chinese language based on the **Qwen2.5** model family and the **Fineweb-Edu-Chinese-V2.2** dataset.
+QEdpediaCN-Qwen is an SFT project dedicated to developing educational Question-Answering models in Chinese language based on the **Qwen2.5** model family and the **Fineweb-Edu-Chinese-V2.2** dataset.
 
 ## Overview
 
 The project trains a Qwen2.5 model using **4-bit QLoRA** with **validation early stopping** via Transformers' native `EarlyStoppingCallback`. The data is split into train, validation, and test sets, and training stops automatically when validation loss stops improving. After training, LoRA adapters are merged into the base model and evaluated on both validation and test sets, enabling direct comparison with pre-training benchmarks.
 
-The pipeline supports **Retrieval-Augmented Generation (RAG)** with configurable context modes: labeled context from training data, RAG-retrieved context, or no context.
+The pipeline supports **Knowledge Distillation** from DeepSeek-V4-Pro to generate high-quality teacher responses for training data, and **Retrieval-Augmented Generation (RAG)** with configurable context modes: labeled context from training data, RAG-retrieved context, or no context.
 
 ## Core Architecture
 
 The training workflow follows a structured pipeline:
-1.  **Preprocessing:** Converts raw dataset files into SFT (Instruction/Output) format and splits them into train, validation, and test sets. Supports a `use_processed_data` flag to skip reprocessing and load previously saved data directly.
-2.  **RAG Knowledge Base:** Builds or loads a ChromaDB vector store from `raw_content` fields for retrieval-augmented context (only runs when RAG inference flags are enabled). Runs after preprocessing since it reads the processed data.
-3.  **Benchmark Evaluation (Pre-Training):** Evaluates the base model on validation and test sets to establish baseline perplexity.
-4.  **Training:**
+1.  **Knowledge Distillation (Optional):** Calls the DeepSeek API to generate high-quality teacher responses for each training example. Resumable via checkpoint. Saves `distilled_data.jsonl` with both original and teacher outputs. Runs before preprocessing so distilled data is available for splitting.
+2.  **Preprocessing:** Converts raw dataset files into SFT (Instruction/Output) format and splits them into train, validation, and test sets. Supports `use_processed_data` to skip reprocessing and `use_distilled_data` to load from distilled data.
+3.  **RAG Knowledge Base:** Builds or loads a ChromaDB vector store from `raw_content` fields for retrieval-augmented context (only runs when RAG inference flags are enabled). Runs after preprocessing since it reads the processed data.
+4.  **Benchmark Evaluation (Pre-Training):** Evaluates the base model on validation and test sets to establish baseline perplexity.
+5.  **Training:**
     - **Load:** Initializes the base model using 4-bit quantization.
-    - **Train:** Executes SFT training on the train set with LoRA. Supports context-aware formatting with labeled or RAG-retrieved context.
+    - **Train:** Executes SFT training on the train set with LoRA. Supports context-aware formatting with labeled or RAG-retrieved context. When distilled data is available, uses `distilled_output` as the training target.
     - **Early Stopping:** Evaluates on the validation set at regular step intervals. Training stops when validation loss plateaus (configurable patience and threshold).
     - **Save:** Saves the best LoRA adapters to `outputs/lora_adapter/<timestamp>/`.
     - **Log:** Records full training loss history to `outputs/train_stats.json`.
-5.  **Merge LoRA:** Merges trained LoRA adapters into the base model at full precision and saves to `models/current_model`.
-6.  **Post-Training Evaluation:** Evaluates the merged model on validation and test sets, enabling direct comparison with pre-training benchmarks.
-7.  **RAG Testing:** Standalone module to test retrieval quality (Precision@k, Recall@k, MRR) and compare perplexity across context modes.
-8.  **Deployment:** Serves the merged model via FastAPI REST API + Gradio web UI. Loads model with 4-bit quantization (configurable). Supports optional RAG integration with per-request toggle.
+6.  **Merge LoRA:** Merges trained LoRA adapters into the base model at full precision and saves to `models/current_model`.
+7.  **Post-Training Evaluation:** Evaluates the merged model on validation and test sets, enabling direct comparison with pre-training benchmarks.
+8.  **RAG Testing:** Standalone module to test retrieval quality (Precision@k, Recall@k, MRR) and compare perplexity across context modes.
+9.  **Deployment:** Serves the merged model via FastAPI REST API + Gradio web UI. Loads model with 4-bit quantization (configurable). Supports optional RAG integration with per-request toggle.
 
 ## Technical Stack
 
@@ -31,6 +32,7 @@ The training workflow follows a structured pipeline:
 - **Dataset:** Fineweb-Edu-Chinese-V2.2 (sft_qa subset)
 - **Technique:** 4-bit QLoRA (via `bitsandbytes`, `peft`)
 - **Orchestration:** `trl`, `transformers`, `accelerate`
+- **Knowledge Distillation:** DeepSeek API (v4-pro/v4-flash), `aiohttp` for async HTTP
 - **RAG:** `sentence-transformers`, `chromadb`, `BAAI/bge-small-zh-v1.5` (embedder), `BAAI/bge-reranker-base` (reranker)
 - **Deployment:** `fastapi`, `gradio`, `uvicorn`
 - **Logging:** `wandb`, local JSON stats (`train_stats.json`, `eval_stats.json`)
@@ -40,7 +42,7 @@ The training workflow follows a structured pipeline:
 ```text
 ├── data/
 │   ├── raw/                # Original jsonl files
-│   └── processed/          # Train/Val/Test split datasets
+│   └── processed/          # Train/Val/Test split datasets, distilled data
 ├── configs/
 │   └── config.yaml         # Training hyperparameters and paths
 ├── models/                 # Base and merged model weights
@@ -52,12 +54,14 @@ The training workflow follows a structured pipeline:
 │   ├── db/                 # ChromaDB vector store (gitignored)
 │   └── models/             # Embedder and reranker models (gitignored)
 ├── src/
+│   ├── __init__.py         # Package marker
 │   ├── utils.py            # Config loading utilities
 │   ├── model_utils.py      # LoRA merge utilities
 │   ├── inference_engine.py # Model + RAG inference engine
 │   ├── api.py              # FastAPI router and schemas
 │   └── gradio_app.py       # Gradio chat interface
 ├── data_preprocess.py      # Data engineering pipeline
+├── distill.py              # Knowledge distillation from DeepSeek API
 ├── sft_train.py            # QLoRA training with early stopping
 ├── test_eval.py            # Evaluation & benchmarking
 ├── main.py                 # Main pipeline orchestrator
@@ -74,8 +78,8 @@ The training workflow follows a structured pipeline:
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/byn17Z/QACN-Qwen.git
-   cd QACN-Qwen
+   git clone https://github.com/byn17Z/QEdpediaCN-Qwen.git
+   cd QEdpediaCN-Qwen
    ```
 
 2. Create and activate a virtual environment:
@@ -108,18 +112,25 @@ training:
   early_stopping_threshold: 0.01
 
 dataset:
-  use_processed_data: false  # Set true to skip reprocessing raw data
+  use_processed_data: false   # Set true to skip reprocessing raw data
+  use_distilled_data: false   # Set true to use distilled outputs for training
+
+distill:
+  enabled: false              # Set true to run distillation stage
+  model: "deepseek-v4-pro"   # "deepseek-v4-pro" or "deepseek-v4-flash"
+  thinking_mode: true         # Capture chain-of-thought reasoning
+  sample_size: 0              # 0 = all data; >0 = random sample
 
 rag:
-  build_rag_db: true         # true = rebuild DB; false = load existing
+  build_rag_db: true          # true = rebuild DB; false = load existing
   rag_inference_deploy: false # Enable RAG for deployment
-  context_mask_test: false   # Hide context during testing
-  rag_inference_test: false  # true = use RAG docs; false = labeled context
-  context_mask_train: false  # Hide context during training
-  rag_inference_train: false # true = use RAG docs; false = labeled context
+  context_mask_test: false    # Hide context during testing
+  rag_inference_test: false   # true = use RAG docs; false = labeled context
+  context_mask_train: false   # Hide context during training
+  rag_inference_train: false  # true = use RAG docs; false = labeled context
 
 deploy:
-  quantization: "4bit"       # "4bit" (BitsAndBytes NF4) or "none" (bf16/fp16)
+  quantization: "4bit"        # "4bit" (BitsAndBytes NF4) or "none" (bf16/fp16)
   max_new_tokens: 512
   temperature: 0.7
 ```
@@ -130,7 +141,22 @@ The `main.py` script automates the entire process from preprocessing to benchmar
 python main.py --config configs/config.yaml
 ```
 
-### 3. Run Individual Stages
+### 3. Knowledge Distillation (Optional)
+Generate high-quality teacher responses from DeepSeek API before training:
+```bash
+# Set API key
+set DEEPSEEK_API_KEY=sk-...
+
+# Run distillation with cost confirmation
+python distill.py --config configs/config.yaml
+
+# Run distillation without confirmation
+python distill.py --config configs/config.yaml --yes
+```
+
+Then enable `dataset.use_distilled_data: true` in config to train on distilled outputs.
+
+### 4. Run Individual Stages
 ```bash
 # Preprocessing only
 python data_preprocess.py --config configs/config.yaml
@@ -146,7 +172,7 @@ python test_eval.py --config configs/config.yaml --mode test --timestamp "202605
 python rag/rag_test.py --config configs/config.yaml --mode validation --timestamp "20260512153000"
 ```
 
-### 4. Deploy the Model
+### 5. Deploy the Model
 After training and merging, serve the model via FastAPI + Gradio:
 ```bash
 python deploy.py
@@ -175,6 +201,7 @@ Each pipeline run generates a shared timestamp. Both training and evaluation scr
 - `outputs/train_stats.json` — full training loss history per run
 - `outputs/eval_stats.json` — evaluation metrics per run (with `mode` mark: "validation" or "test")
 - `outputs/rag_test_stats.json` — RAG retrieval metrics and perplexity comparison across context modes
+- `data/processed/distill_cost.json` — distillation cost summary (tokens and USD)
 
 ## Monitoring
 Training progress and evaluation metrics are logged to **Weights & Biases (wandb)**. Ensure you are logged in:

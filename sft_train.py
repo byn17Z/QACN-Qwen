@@ -25,16 +25,20 @@ def main(config_path: str, timestamp: str):
     model_config = config["model"]
     training_config = config["training"]
     logging_config = config["logging"]
+    dataset_config = config.get("dataset", {})
     rag_config = config.get("rag", {})
 
     # RAG flags
     context_mask_train = rag_config.get("context_mask_train", False)
     rag_inference_train = rag_config.get("rag_inference_train", False)
 
+    # Distillation flag
+    use_distilled = dataset_config.get("use_distilled_data", False)
+
     # Paths
     model_path = model_config["base_model_path"]
-    train_data_path = os.path.join(config["dataset"]["processed_data_path"], "train.jsonl")
-    val_data_path = os.path.join(config["dataset"]["processed_data_path"], "val.jsonl")
+    train_data_path = os.path.join(dataset_config["processed_data_path"], "train.jsonl")
+    val_data_path = os.path.join(dataset_config["processed_data_path"], "val.jsonl")
     output_dir = os.path.join(logging_config["output_dir"], "lora_adapter", timestamp)
 
     # Load RAG components if needed
@@ -104,7 +108,10 @@ def main(config_path: str, timestamp: str):
     def formatting_prompts_func(example):
         instruction = example['instruction']
         input_text = example['input']
-        output_text = example['output']
+        if use_distilled and example.get('distilled_output'):
+            output_text = example['distilled_output']
+        else:
+            output_text = example['output']
 
         if context_mask_train:
             # No context
@@ -199,14 +206,14 @@ def main(config_path: str, timestamp: str):
 
     results = []
     if os.path.exists(train_stats_path):
-        with open(train_stats_path, 'r') as f:
+        with open(train_stats_path, 'r', encoding='utf-8') as f:
             try:
                 results = json.load(f)
-            except:
+            except (json.JSONDecodeError, ValueError):
                 results = []
 
     results.append(train_metrics)
-    with open(train_stats_path, 'w') as f:
+    with open(train_stats_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=4)
 
     print(f"Training stats saved to {train_stats_path}")

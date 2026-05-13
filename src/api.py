@@ -19,8 +19,8 @@ class ChatRequest(BaseModel):
     input: str = Field(default="", description="Additional input context")
     use_rag: bool = Field(default=False, description="Enable RAG retrieval for context")
     max_new_tokens: Optional[int] = Field(default=None, ge=1, le=4096)
-    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    temperature: Optional[float] = Field(default=None, ge=0.01, le=2.0)
+    top_p: Optional[float] = Field(default=None, ge=0.01, le=1.0)
     top_k: Optional[int] = Field(default=None, ge=1, le=200)
     repetition_penalty: Optional[float] = Field(default=None, ge=1.0, le=2.0)
     do_sample: Optional[bool] = None

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-QACN-Qwen is a QLoRA fine-tuning project that trains Chinese educational QA models using the Qwen2.5 family (1.5B/3B/7B/14B) on the Fineweb-Edu-Chinese-V2.2 dataset. The pipeline preprocesses data, benchmarks the base model, trains with validation early stopping via Transformers' native `EarlyStoppingCallback`, merges LoRA adapters into the base model, and evaluates the merged model.
+QEdpediaCN-Qwen is a QLoRA fine-tuning project that trains Chinese educational QA models using the Qwen2.5 family (1.5B/3B/7B/14B) on the Fineweb-Edu-Chinese-V2.2 dataset. The pipeline preprocesses data, benchmarks the base model, trains with validation early stopping via Transformers' native `EarlyStoppingCallback`, merges LoRA adapters into the base model, and evaluates the merged model.
 
 ## Commands
 
@@ -14,6 +14,11 @@ python main.py --config configs/config.yaml
 
 # Data preprocessing only
 python data_preprocess.py --config configs/config.yaml
+
+# Knowledge distillation from DeepSeek API (standalone)
+set DEEPSEEK_API_KEY=sk-...
+python distill.py --config configs/config.yaml
+python distill.py --config configs/config.yaml --yes  # skip cost confirmation
 
 # Training only (requires --timestamp)
 python sft_train.py --config configs/config.yaml --timestamp "20260512153000"
@@ -41,26 +46,87 @@ wandb login
 
 The pipeline is orchestrated by `main.py` which generates a digit-only timestamp (e.g., `20260513153000`) and runs:
 
-1. **Preprocessing** (`data_preprocess.py`): Loads raw JSONL from `data/raw/`, formats into Instruction/Output SFT format, preserves `raw_content` field for RAG knowledge base, shuffles (seed 42), splits into train/val/test sets based on config sizes, saves to `data/processed/train.jsonl`, `val.jsonl`, `test.jsonl`. Supports `use_processed_data` config flag to skip reprocessing and load `sft_data.jsonl` directly.
+1. **Knowledge Distillation** (`distill.py`, optional): When `distill.enabled: true`, calls DeepSeek API to generate high-quality teacher responses for each training example. Saves `distilled_data.jsonl` with both original and teacher outputs. Resumable via checkpoint. Runs before preprocessing so distilled data is available for splitting.
 
-2. **RAG Knowledge Base** (`rag/rag_db.py`): Builds or loads the ChromaDB vector store from `raw_content` fields in `sft_data.jsonl`. Controlled by `build_rag_db` config flag — `true` rebuilds from scratch, `false` loads existing DB. Only runs when any RAG inference flag is enabled. Runs after preprocessing since it reads `sft_data.jsonl`.
+2. **Preprocessing** (`data_preprocess.py`): Loads raw JSONL from `data/raw/`, formats into Instruction/Output SFT format, preserves `raw_content` field for RAG knowledge base, shuffles (seed 42), splits into train/val/test sets based on config sizes, saves to `data/processed/train.jsonl`, `val.jsonl`, `test.jsonl`. Supports `use_processed_data` config flag to skip reprocessing and load `sft_data.jsonl` directly. Supports `use_distilled_data` config flag to load from `distilled_data.jsonl` instead.
 
-3. **Benchmark Evaluation (Pre-Training)** (`test_eval.py`): Evaluates the base model on both validation and test sets before training, establishing baseline perplexity.
+3. **RAG Knowledge Base** (`rag/rag_db.py`): Builds or loads the ChromaDB vector store from `raw_content` fields in `sft_data.jsonl`. Controlled by `build_rag_db` config flag — `true` rebuilds from scratch, `false` loads existing DB. Only runs when any RAG inference flag is enabled. Runs after preprocessing since it reads `sft_data.jsonl`.
 
-4. **Training** (`sft_train.py`): Loads base model with 4-bit quantization, applies LoRA to all linear layers (q/k/v/o_proj, gate/up/down_proj), trains via `SFTTrainer` with validation early stopping. Evaluates on val set every `eval_steps` steps; stops when `eval_loss` hasn't improved by `early_stopping_threshold` for `early_stopping_patience` evaluations. Saves best LoRA adapters to `outputs/lora_adapter/<timestamp>/`. Logs full training loss history to `outputs/train_stats.json`. Supports context-aware formatting via RAG config flags.
+4. **Benchmark Evaluation (Pre-Training)** (`test_eval.py`): Evaluates the base model on both validation and test sets before training, establishing baseline perplexity.
 
-5. **Merge LoRA** (`src/model_utils.py`): Merges trained LoRA adapters into the base model at full precision (bfloat16/float16) and saves to `models/current_model`. Frees GPU memory after saving.
+5. **Training** (`sft_train.py`): Loads base model with 4-bit quantization, applies LoRA to all linear layers (q/k/v/o_proj, gate/up/down_proj), trains via `SFTTrainer` with validation early stopping. Evaluates on val set every `eval_steps` steps; stops when `eval_loss` hasn't improved by `early_stopping_threshold` for `early_stopping_patience` evaluations. Saves best LoRA adapters to `outputs/lora_adapter/<timestamp>/`. Logs full training loss history to `outputs/train_stats.json`. Supports context-aware formatting via RAG config flags.
 
-6. **Post-Training Evaluation** (`test_eval.py`): Evaluates the merged model on both validation and test sets, enabling direct comparison with pre-training benchmarks. Supports context-aware formatting via RAG config flags.
+6. **Merge LoRA** (`src/model_utils.py`): Merges trained LoRA adapters into the base model at full precision (bfloat16/float16) and saves to `models/current_model`. Frees GPU memory after saving.
 
-7. **RAG Testing** (`rag/rag_test.py`): Standalone module to test RAG retrieval quality (Precision@k, Recall@k, MRR) and compare model perplexity across three context modes: no context, labeled context, and RAG-retrieved context.
+7. **Post-Training Evaluation** (`test_eval.py`): Evaluates the merged model on both validation and test sets, enabling direct comparison with pre-training benchmarks. Supports context-aware formatting via RAG config flags.
 
-8. **Deployment** (`deploy.py`): Serves the merged model via FastAPI REST API + Gradio web UI. Loads model with 4-bit BitsAndBytes NF4 quantization (configurable). Supports optional RAG integration controlled by `rag.rag_inference_deploy` flag — when enabled, loads ChromaDB, embedder, and reranker at startup. RAG can be toggled per-request via API parameter or Gradio checkbox. Components:
+8. **RAG Testing** (`rag/rag_test.py`): Standalone module to test RAG retrieval quality (Precision@k, Recall@k, MRR) and compare model perplexity across three context modes: no context, labeled context, and RAG-retrieved context.
+
+9. **Deployment** (`deploy.py`): Serves the merged model via FastAPI REST API + Gradio web UI. Loads model with 4-bit BitsAndBytes NF4 quantization (configurable). Supports optional RAG integration controlled by `rag.rag_inference_deploy` flag — when enabled, loads ChromaDB, embedder, and reranker at startup. RAG can be toggled per-request via API parameter or Gradio checkbox. Components:
    - `src/inference_engine.py` — `InferenceEngine` class holding model, tokenizer, RAG components; single `generate()` method
    - `src/api.py` — FastAPI router with `/health`, `/v1/models`, `/v1/chat/completions` endpoints
    - `src/gradio_app.py` — Gradio chat interface with RAG toggle and generation parameter sliders
 
-9. **Config**: All hyperparameters in `configs/config.yaml` (paths, LoRA params, batch size, context length, early stopping params, data sizes, RAG flags, deploy settings).
+10. **Config**: All hyperparameters in `configs/config.yaml` (paths, LoRA params, batch size, context length, early stopping params, data sizes, RAG flags, deploy settings).
+
+## Knowledge Distillation (`distill.py`)
+
+Response-level distillation from DeepSeek API. Reads raw data from `data/raw/*.jsonl`, calls DeepSeek API to generate high-quality teacher responses, saves `data/processed/distilled_data.jsonl`. Resumable via checkpoint file.
+
+```bash
+# Set API key
+set DEEPSEEK_API_KEY=sk-...
+
+# Run distillation standalone (with cost confirmation)
+python distill.py --config configs/config.yaml
+
+# Run distillation standalone (skip confirmation)
+python distill.py --config configs/config.yaml --yes
+
+# Run full pipeline with distillation enabled
+# (set distill.enabled: true and dataset.use_distilled_data: true in config)
+python main.py --config configs/config.yaml
+
+# Train on distilled data
+# (set dataset.use_distilled_data: true in config)
+python sft_train.py --config configs/config.yaml --timestamp "20260514120000"
+```
+
+### Output Format
+
+Each line in `distilled_data.jsonl`:
+```json
+{
+  "instruction": "...",
+  "input": "...",
+  "output": "...",
+  "raw_content": "...",
+  "distilled_output": "...",
+  "distilled_reasoning": "..."
+}
+```
+
+Original `output` preserved as fallback. When `dataset.use_distilled_data: true`, the training pipeline uses `distilled_output` instead of `output` for SFT targets.
+
+### Config
+
+Distillation config in `configs/config.yaml` under `distill:` section:
+- `enabled` — `true` to run distillation stage in pipeline
+- `api_base_url` — DeepSeek API endpoint
+- `api_key_env` — env var name holding the API key
+- `model` — `"deepseek-v4-pro"` (stronger) or `"deepseek-v4-flash"` (cheaper)
+- `thinking_mode` — `true` to capture chain-of-thought reasoning
+- `reasoning_effort` — `"high"` or `"max"`
+- `sample_size` — `0` for all data, `>0` for random sample
+- `max_concurrent` — semaphore limit for parallel API calls
+- `max_retries` — retries per request on 429/5xx
+- `base_backoff` / `max_backoff` — exponential backoff parameters
+- `request_timeout` — per-request timeout in seconds
+- `raw_data_dir` — path to raw JSONL files (default `data/raw`)
+- `distilled_data_path` — output path for distilled data (default `data/processed/distilled_data.jsonl`)
+- `checkpoint_path` — path for resumable checkpoint file
+- `seed` — random seed for reproducible sampling
+- `cost_log_path` — path for cost summary output
 
 ## RAG Module (`rag/`)
 
@@ -155,8 +221,35 @@ Log files:
 - LoRA adapters are saved with a timestamp subdirectory: `outputs/lora_adapter/<timestamp>/`.
 - `merge_lora_to_base` loads the base model at full precision (not quantized) for accurate merging, then frees GPU memory after saving.
 - `use_processed_data` config flag: when `true`, loads `data/processed/sft_data.jsonl` directly; when `false`, processes raw data and saves it as `sft_data.jsonl`.
+- `use_distilled_data` config flag: when `true`, loads from `distilled_data.jsonl` instead of `sft_data.jsonl` during preprocessing, and training uses `distilled_output` instead of `output` as SFT target.
 - Virtual environment: `.venv-QEDpediaCN-Qwen` (non-standard name, gitignored).
 - Gitignored directories: `.venv-QEDpediaCN-Qwen/`, `hf_cache/`, `data/`, `models/`, `rag/db/`, `rag/models/`, `__pycache__/`.
+- `AutoModelForCausalLM.from_pretrained()` uses `dtype=` (not `torch_dtype=`) — in transformers 5.5.3, `torch_dtype` is deprecated.
+
+## Code Review Fixes (2026-05-14)
+
+Full-project code review found and fixed the following issues:
+
+### Critical
+- **Missing `src/__init__.py`**: Created empty file so `src` is recognized as a Python package. Without it, `from src.utils import load_config` would fail on clean installs.
+- **Pipeline ordering**: Distillation (Stage 0.5) now runs before preprocessing (Stage 1) so `distilled_data.jsonl` exists when `data_preprocess.py` needs it. Previously distillation ran after preprocessing, so distilled data was never consumed in a single pipeline run.
+- **API validation bounds** (`src/api.py`): `temperature` and `top_p` lower bound changed from `0.0` to `0.01` to prevent division-by-zero in nucleus sampling.
+- **`run_command` failure propagation** (`main.py`): Now returns exit code; pipeline aborts on critical stage failures (preprocessing, eval, training) instead of silently continuing with stale/missing data.
+
+### High
+- **Bare `except:` clauses** (`sft_train.py`, `test_eval.py`): Changed to `except (json.JSONDecodeError, ValueError):` — bare except was catching `SystemExit` and `KeyboardInterrupt`, preventing clean Ctrl+C shutdown.
+- **Inconsistent dict access** (`sft_train.py`): `config["dataset"]` changed to `dataset_config` (the variable already assigned via `config.get("dataset", {})`) on lines 40-41.
+
+### Medium
+- **Dead code removed** (`data_preprocess.py`): Unreachable `if not os.path.exists(output_dir)` check after `os.makedirs(output_dir, exist_ok=True)`.
+- **Missing distilled data warning** (`data_preprocess.py`): When `use_distilled_data=true` but the file doesn't exist, now prints a warning and falls back instead of silently using raw data.
+- **`os.makedirs` on empty dirname** (`distill.py`): Guarded against bare filenames where `os.path.dirname` returns `""`.
+- **Checkpoint metadata** (`distill.py`): `completed_entries` renamed to `total_processed`; added separate `successful_entries` count.
+- **Wasteful last-attempt sleep** (`distill.py`): 429/5xx responses now return immediately on the final retry attempt instead of sleeping then giving up.
+- **Eval timestamp deduplication** (`main.py`): Post-training eval uses `timestamp + "-post"` suffix so `eval_stats.json` entries are distinguishable from pre-training evals.
+- **RAG DB stale data check** (`main.py`): Added `sft_data.jsonl` existence check before building RAG knowledge base.
+- **File encoding** (`sft_train.py`, `test_eval.py`): Added `encoding='utf-8'` to `open()` calls for JSON log files — was relying on platform default, which can fail on Windows with non-UTF-8 locale.
+- **HF_HOME path** (`data_preprocess.py`): Changed from relative `./hf_cache` to absolute path based on script location.
 
 ## Code Conventions
 

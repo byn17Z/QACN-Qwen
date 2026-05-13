@@ -28,6 +28,35 @@ dataset:
   raw_data_path: "data/raw"
   processed_data_path: "data/processed"
   use_processed_data: true
+  use_distilled_data: false           # true = training uses distilled_output instead of output
+
+# Knowledge Distillation Configuration
+distill:
+  enabled: false                      # true = run distillation stage in pipeline
+  api_base_url: "https://api.deepseek.com"
+  api_key_env: "DEEPSEEK_API_KEY"     # env var name holding the API key
+  model: "deepseek-v4-pro"            # "deepseek-v4-pro" or "deepseek-v4-flash"
+  thinking_mode: true                 # capture reasoning_content from teacher
+  reasoning_effort: "high"            # "high" or "max"
+
+  # Data paths
+  raw_data_dir: "data/raw"
+  distilled_data_path: "data/processed/distilled_data.jsonl"
+  checkpoint_path: "data/processed/distill_checkpoint.json"
+
+  # Concurrency and rate limiting
+  max_concurrent: 5                   # semaphore limit for parallel API calls
+  max_retries: 5                      # retries per request on 429/5xx
+  base_backoff: 1.0                   # initial backoff seconds (doubles each retry)
+  max_backoff: 60.0                   # backoff cap
+  request_timeout: 120                # per-request timeout in seconds
+
+  # Distillation scope
+  sample_size: 0                      # 0 = use all raw data; >0 = random sample
+  seed: 42                            # for reproducible sampling
+
+  # Cost logging
+  cost_log_path: "data/processed/distill_cost.json"
 
 # RAG Configuration
 rag:

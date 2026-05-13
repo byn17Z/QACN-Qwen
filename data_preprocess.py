@@ -5,7 +5,7 @@ Dependencies: datasets, pyyaml (via src.utils)
 """
 
 import os
-os.environ['HF_HOME'] = './hf_cache'
+os.environ['HF_HOME'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hf_cache')
 import json
 from datasets import load_dataset
 from typing import Dict, Any
@@ -46,27 +46,36 @@ def main(config_path: str):
     test_set_size = int(training_config["test_set_size"])
 
     os.makedirs(output_dir, exist_ok=True)
-    if not os.path.exists(output_dir):
-        print(f"Error: Failed to create output directory at {output_dir}")
-        return
-    else:
-        print(f"Output directory is set to: {output_dir}")
+    print(f"Output directory is set to: {output_dir}")
 
     sft_data_path = os.path.join(output_dir, "sft_data.jsonl")
 
-    if use_processed_data:
-        print(f"Loading processed dataset from: {sft_data_path}")
-        processed_dataset = load_dataset('json', data_files=sft_data_path, split='train')
-    else:
-        print(f"Loading raw dataset: {dataset_config['name']}")
-        dataset = load_dataset('json', data_dir=raw_data_dir, split='train')
+    # Check for distilled data as alternative source
+    use_distilled = dataset_config.get("use_distilled_data", False)
+    distilled_path = config.get("distill", {}).get("distilled_data_path", "")
 
-        print(f"Formatting {len(dataset)} entries...")
-        processed_dataset = dataset.map(format_dataset_entry, remove_columns=dataset.column_names)
+    if use_distilled and distilled_path:
+        if os.path.exists(distilled_path):
+            print(f"Using distilled data from: {distilled_path}")
+            processed_dataset = load_dataset('json', data_files=distilled_path, split='train')
+        else:
+            print(f"Warning: use_distilled_data is true but {distilled_path} not found. Falling back to other sources.")
+            use_distilled = False
 
-        print(f"Saving processed dataset to: {sft_data_path}")
-        processed_dataset.to_json(sft_data_path, force_ascii=False)
-        print(f"Processed dataset saved ({len(processed_dataset)} entries)")
+    if not use_distilled:
+        if use_processed_data:
+            print(f"Loading processed dataset from: {sft_data_path}")
+            processed_dataset = load_dataset('json', data_files=sft_data_path, split='train')
+        else:
+            print(f"Loading raw dataset: {dataset_config['name']}")
+            dataset = load_dataset('json', data_dir=raw_data_dir, split='train')
+
+            print(f"Formatting {len(dataset)} entries...")
+            processed_dataset = dataset.map(format_dataset_entry, remove_columns=dataset.column_names)
+
+            print(f"Saving processed dataset to: {sft_data_path}")
+            processed_dataset.to_json(sft_data_path, force_ascii=False)
+            print(f"Processed dataset saved ({len(processed_dataset)} entries)")
 
     # Shuffle and split into train, val, and test sets
     shuffled_dataset = processed_dataset.shuffle(seed=42)
