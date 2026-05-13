@@ -25,7 +25,12 @@ python test_eval.py --config configs/config.yaml --mode test --timestamp "202605
 # RAG testing (requires --mode and --timestamp)
 python rag/rag_test.py --config configs/config.yaml --mode validation --timestamp "20260512153000"
 
-# Install dependencies
+# Deployment (FastAPI + Gradio)
+python deploy.py
+python deploy.py --config configs/config.yaml
+python deploy.py --host 127.0.0.1 --port 9000
+
+# Install dependencies (includes fastapi, gradio for deployment)
 pip install -r requirements.txt
 
 # Wandb setup (required before training)
@@ -50,7 +55,12 @@ The pipeline is orchestrated by `main.py` which generates a digit-only timestamp
 
 7. **RAG Testing** (`rag/rag_test.py`): Standalone module to test RAG retrieval quality (Precision@k, Recall@k, MRR) and compare model perplexity across three context modes: no context, labeled context, and RAG-retrieved context.
 
-8. **Config**: All hyperparameters in `configs/config.yaml` (paths, LoRA params, batch size, context length, early stopping params, data sizes, RAG flags).
+8. **Deployment** (`deploy.py`): Serves the merged model via FastAPI REST API + Gradio web UI. Loads model with 4-bit BitsAndBytes NF4 quantization (configurable). Supports optional RAG integration controlled by `rag.rag_inference_deploy` flag — when enabled, loads ChromaDB, embedder, and reranker at startup. RAG can be toggled per-request via API parameter or Gradio checkbox. Components:
+   - `src/inference_engine.py` — `InferenceEngine` class holding model, tokenizer, RAG components; single `generate()` method
+   - `src/api.py` — FastAPI router with `/health`, `/v1/models`, `/v1/chat/completions` endpoints
+   - `src/gradio_app.py` — Gradio chat interface with RAG toggle and generation parameter sliders
+
+9. **Config**: All hyperparameters in `configs/config.yaml` (paths, LoRA params, batch size, context length, early stopping params, data sizes, RAG flags, deploy settings).
 
 ## RAG Module (`rag/`)
 
@@ -73,6 +83,54 @@ RAG config flags in `configs/config.yaml` under `rag:` section:
 Data format: raw data has `raw_content` field as labeled knowledge context. `data_preprocess.py` preserves this field in processed output.
 
 Detailed implementation plan: see `rag.md`.
+
+## Deployment (`deploy.py`)
+
+The deployment server loads the merged model and serves it via FastAPI + Gradio.
+
+```bash
+python deploy.py                              # defaults from config
+python deploy.py --config configs/config.yaml # explicit config
+python deploy.py --host 127.0.0.1 --port 9000 # override host/port
+```
+
+Endpoints:
+- `GET /health` — health check (model path, RAG status)
+- `GET /v1/models` — model metadata (family, size, quantization)
+- `POST /v1/chat/completions` — inference with `ChatRequest` JSON body
+- `GET /gradio` — Gradio web UI
+
+### Startup Sequence
+
+1. `load_config()` → resolve model path (`deploy.model_path_override` > `model.current_model_path` > `model.base_model_path`)
+2. Load tokenizer + model (4-bit NF4 via `BitsAndBytesConfig` if `deploy.quantization=="4bit"`, else bf16/fp16)
+3. If `rag.rag_inference_deploy` is `true`: load ChromaDB collection, embedder, reranker via existing `rag/` module
+4. Construct `InferenceEngine` (holds model, tokenizer, RAG components)
+5. Create FastAPI app, include API router, mount Gradio at `/gradio`
+6. `uvicorn.run()`
+
+### InferenceEngine (`src/inference_engine.py`)
+
+`generate()` method flow: validate input → resolve generation params (request overrides > config defaults) → RAG retrieval if enabled (graceful degradation on failure) → build prompt matching training format → `model.generate()` under `torch.inference_mode()` → decode generated tokens only → return response + metadata.
+
+Prompt format (must match training):
+- With RAG: `Context: {docs}\nInstruction: {q}\nInput: {inp}\nOutput:`
+- Without RAG: `Instruction: {q}\nInput: {inp}\nOutput:`
+
+### Error Handling
+
+- Startup: model path not found → exit 1; RAG DB missing when required → exit 1
+- Runtime: empty instruction → 400; CUDA OOM → 500 + clear cache; RAG failure → log warning, proceed without context
+
+### Config
+
+Deploy config in `configs/config.yaml` under `deploy:` section:
+- `quantization` — `"4bit"` (BitsAndBytes NF4) or `"none"` (bf16/fp16)
+- `model_path_override` — non-empty overrides `current_model_path`
+- `rag_enabled_default` — default RAG toggle for Gradio UI
+- Generation defaults: `max_new_tokens`, `temperature`, `top_p`, `top_k`, `repetition_penalty`, `do_sample`
+
+Detailed implementation plan: see `deploy.md`. Implementation details: see `deployment_details.md`.
 
 ## Logging
 

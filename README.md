@@ -23,6 +23,7 @@ The training workflow follows a structured pipeline:
 5.  **Merge LoRA:** Merges trained LoRA adapters into the base model at full precision and saves to `models/current_model`.
 6.  **Post-Training Evaluation:** Evaluates the merged model on validation and test sets, enabling direct comparison with pre-training benchmarks.
 7.  **RAG Testing:** Standalone module to test retrieval quality (Precision@k, Recall@k, MRR) and compare perplexity across context modes.
+8.  **Deployment:** Serves the merged model via FastAPI REST API + Gradio web UI. Loads model with 4-bit quantization (configurable). Supports optional RAG integration with per-request toggle.
 
 ## Technical Stack
 
@@ -31,6 +32,7 @@ The training workflow follows a structured pipeline:
 - **Technique:** 4-bit QLoRA (via `bitsandbytes`, `peft`)
 - **Orchestration:** `trl`, `transformers`, `accelerate`
 - **RAG:** `sentence-transformers`, `chromadb`, `BAAI/bge-small-zh-v1.5` (embedder), `BAAI/bge-reranker-base` (reranker)
+- **Deployment:** `fastapi`, `gradio`, `uvicorn`
 - **Logging:** `wandb`, local JSON stats (`train_stats.json`, `eval_stats.json`)
 
 ## Project Structure
@@ -51,11 +53,15 @@ The training workflow follows a structured pipeline:
 │   └── models/             # Embedder and reranker models (gitignored)
 ├── src/
 │   ├── utils.py            # Config loading utilities
-│   └── model_utils.py      # LoRA merge utilities
+│   ├── model_utils.py      # LoRA merge utilities
+│   ├── inference_engine.py # Model + RAG inference engine
+│   ├── api.py              # FastAPI router and schemas
+│   └── gradio_app.py       # Gradio chat interface
 ├── data_preprocess.py      # Data engineering pipeline
 ├── sft_train.py            # QLoRA training with early stopping
 ├── test_eval.py            # Evaluation & benchmarking
-└── main.py                 # Main pipeline orchestrator
+├── main.py                 # Main pipeline orchestrator
+└── deploy.py               # Deployment server (FastAPI + Gradio)
 ```
 
 ## Setup & Installation
@@ -106,10 +112,16 @@ dataset:
 
 rag:
   build_rag_db: true         # true = rebuild DB; false = load existing
+  rag_inference_deploy: false # Enable RAG for deployment
   context_mask_test: false   # Hide context during testing
   rag_inference_test: false  # true = use RAG docs; false = labeled context
   context_mask_train: false  # Hide context during training
   rag_inference_train: false # true = use RAG docs; false = labeled context
+
+deploy:
+  quantization: "4bit"       # "4bit" (BitsAndBytes NF4) or "none" (bf16/fp16)
+  max_new_tokens: 512
+  temperature: 0.7
 ```
 
 ### 2. Run the Pipeline
@@ -133,6 +145,19 @@ python test_eval.py --config configs/config.yaml --mode test --timestamp "202605
 # RAG testing
 python rag/rag_test.py --config configs/config.yaml --mode validation --timestamp "20260512153000"
 ```
+
+### 4. Deploy the Model
+After training and merging, serve the model via FastAPI + Gradio:
+```bash
+python deploy.py
+python deploy.py --host 127.0.0.1 --port 9000
+```
+
+- **API:** `http://localhost:8000/v1/chat/completions` (POST, JSON body)
+- **Gradio UI:** `http://localhost:8000/gradio` (browser)
+- **Health check:** `http://localhost:8000/health`
+
+Set `rag.rag_inference_deploy: true` in `configs/config.yaml` to enable RAG at deployment time.
 
 ## Known Issues
 
