@@ -1,6 +1,6 @@
-# QEdpediaCN-Qwen
+# QACN-Qwen
 
-QEdpediaCN-Qwen is an SFT project dedicated to developing educational Question-Answering models in Chinese language based on the **Qwen2.5** model family and the **Fineweb-Edu-Chinese-V2.2** dataset.
+QACN-Qwen is an SFT project dedicated to developing educational Question-Answering models in Chinese language based on the **Qwen2.5** model family and the **Fineweb-Edu-Chinese-V2.2** dataset.
 
 ## Overview
 
